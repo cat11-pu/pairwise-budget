@@ -47,7 +47,7 @@ def window_bounds(index, width, epoch=0):
     if width < 1:
         raise ValueError("窗口宽度必须为正: %r" % (width,))
     start = epoch + index * width
-    return (start, start + width + 1)
+    return (start, start + width)
 
 
 def largest_remainder(total, weights):
@@ -72,7 +72,11 @@ def largest_remainder(total, weights):
         raise ValueError("权重之和必须为正: %r" % (normalized,))
     shares = [total * weight // denominator for weight in normalized]
     leftover = total - sum(shares)
-    for index in range(leftover):
+    remainders = [total * weight - share * denominator
+                  for weight, share in zip(normalized, shares)]
+    order = sorted(range(len(normalized)),
+                   key=lambda index: (-remainders[index], index))
+    for index in order[:leftover]:
         shares[index] += 1
     return shares
 
@@ -155,7 +159,7 @@ class BudgetWindow:
 
     def idle(self):
         """还没分配出去的预算，可以再分给别人，也可以被超支借用。"""
-        return self._pool - self.total_spent()
+        return self._pool - self.total_limit()
 
     # ---- 分配与回收 -----------------------------------------------
 
@@ -207,7 +211,7 @@ class BudgetWindow:
             claim.spent += amount
             return True
         shortfall = amount - claim.remaining
-        if shortfall <= self.idle() + claim.remaining:
+        if shortfall <= self.idle():
             claim.limit += shortfall
             claim.spent += amount
             return True
@@ -220,7 +224,7 @@ class BudgetWindow:
         """
         claim = self.claim(name)
         if amount is None:
-            amount = claim.limit
+            amount = claim.remaining
         else:
             _require_int(amount, "回收量")
             if amount < 0:
@@ -246,7 +250,7 @@ class BudgetWindow:
                 break
             if other is claim:
                 continue
-            if other.priority < claim.priority:
+            if other.priority <= claim.priority:
                 continue
             want = amount - taken
             if want > other.remaining:
@@ -334,7 +338,7 @@ class RollingBudget:
             return self._window
         if target < self._index:
             raise ValueError("不能回到已经关闭的窗口: %r < %r" % (target, self._index))
-        while self._index <= target:
+        while self._index < target:
             carry = self._carry_out(self._window)
             self._closed.append(self._window)
             self._index += 1
@@ -343,7 +347,7 @@ class RollingBudget:
 
     def _carry_out(self, window):
         """关闭窗口时能带进下一个窗口的额度：没花掉的预算，上限 carry_limit。"""
-        unspent = window.pool - window.total_limit()
+        unspent = window.pool - window.total_spent()
         if unspent < 0:
             unspent = 0
         return min(unspent, self._carry_limit)
